@@ -67,6 +67,11 @@ export async function run(argv: string[]): Promise<void> {
       const { launchTui } = await import('./tui/app.js');
       return launchTui();
     }
+    case 'apply': {
+      const { runApply } = await import('./commands/apply.js');
+      await runApply(args.slice(1));
+      return;
+    }
     // Other commands are wired in by Agent D.
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
