@@ -6,27 +6,43 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const pkg = JSON.parse(readFileSync(join(__dirname, '..', 'package.json'), 'utf-8'));
 const VERSION = pkg.version as string;
 
-const HELP = `gh-baseline v${VERSION} — GitHub account hardening (CLI + MCP)
+const HELP = `gh-baseline v${VERSION} — GitHub account hardening (CLI, interactive TUI, MCP)
 
 Usage: gh-baseline <command> [options]
 
 Commands:
-  doctor                 Check auth, scopes, config
-  init                   First-run setup wizard (auth + allowlist)
-  scan <repo>            Scan a repo against the active profile
-  scan --all             Scan every allowlisted repo
-  apply <op> <repo>      Apply an actor to a repo (default dry-run)
-  audit [--tail N]       Show recent audit log entries
-  profiles list          List bundled profiles
-  profiles show <name>   Print a profile spec
-  mcp                    Run as an MCP server over stdio
+  doctor                       Check auth, scopes, config
+  init                         Interactive first-run wizard (auth + allowlist + first profile)
+  scan <repo>                  Scan a repo against the active profile
+  scan --all                   Scan every allowlisted repo
+  scan --interactive           TUI dashboard: scan + drill-down
+  apply <op> <repo>            Apply an actor to a repo (default dry-run)
+  audit [--tail N]             Show recent audit log entries
+  profiles list                List available profiles
+  profiles show <name>         Print a profile spec
+  profiles new                 Interactive profile builder (Ink TUI)
+  profiles edit <name>         Open an existing profile in the builder
+  profiles export <name>       Print profile as YAML for sharing/checking-in
+  tui                          Open the full interactive dashboard
+  mcp                          Run as an MCP server over stdio
 
 Global flags:
-  --apply                Persist changes (without this, every action is a dry-run)
-  --json                 Emit JSON
-  --profile <name>       Profile to use (default: oss-public)
-  -v, --version          Print version
-  -h, --help             Print this help
+  --apply                      Persist changes (without this, every action is a dry-run)
+  --json                       Emit JSON
+  --profile <name>             Profile to use (default: oss-public)
+  --interactive                Open the TUI for this command (where supported)
+  -v, --version                Print version
+  -h, --help                   Print this help
+
+Profiles can be defined two ways:
+  1. Programmatic — TypeScript modules under src/profiles/ (in this package) or
+     ~/.config/gh-baseline/profiles/*.ts (user-defined). Bundled: oss-public.
+  2. Declarative — YAML at ~/.config/gh-baseline/profiles/*.yaml. Composed via
+     'profiles new' or written by hand. Both forms validate against the same
+     zod schema and behave identically.
+
+The interactive builder ('profiles new', 'tui') produces a YAML file you can
+commit to a config repo, version-control, and share across machines.
 `;
 
 export async function run(argv: string[]): Promise<void> {
@@ -46,6 +62,10 @@ export async function run(argv: string[]): Promise<void> {
     case 'mcp': {
       const { startMcpServer } = await import('./mcp/server.js');
       return startMcpServer();
+    }
+    case 'tui': {
+      const { launchTui } = await import('./tui/app.js');
+      return launchTui();
     }
     // Other commands are wired in by Agent D.
     default:
