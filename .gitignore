@@ -1,0 +1,27 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+
+# Environment / secrets
+.env
+*.env
+*.secrets
+**/.config/gh-baseline/auth
+**/.config/gh-baseline/audit.jsonl
+
+# Local config (instance-specific)
+.config/
+
+# Test artefacts
+.test-tmp/
+coverage/
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+*.swp
+
+# Claude Code local
+.claude/

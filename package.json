@@ -1,0 +1,62 @@
+{
+  "name": "@matthesketh/gh-baseline",
+  "version": "0.1.0",
+  "description": "Profile-driven, idempotent, security-first GitHub account hardening — CLI + MCP server",
+  "type": "module",
+  "main": "dist/index.js",
+  "bin": {
+    "gh-baseline": "dist/index.js"
+  },
+  "files": [
+    "dist/",
+    "LICENSE",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc && tsc-alias",
+    "dev": "tsx src/index.ts",
+    "test": "vitest run",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": [
+    "github",
+    "mcp",
+    "claude",
+    "claude-code",
+    "branch-protection",
+    "repo-hardening",
+    "ossf-scorecard",
+    "devops",
+    "octokit"
+  ],
+  "author": "Matt Hesketh <matthew@matthewhesketh.com>",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/wrxck/gh-baseline.git"
+  },
+  "homepage": "https://github.com/wrxck/gh-baseline",
+  "bugs": {
+    "url": "https://github.com/wrxck/gh-baseline/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@octokit/auth-token": "^5.1.2",
+    "@octokit/plugin-retry": "^7.1.4",
+    "@octokit/plugin-throttling": "^9.4.0",
+    "@octokit/rest": "^21.0.2",
+    "proper-lockfile": "4.1.2",
+    "zod": "^3.24.0"
+  },
+  "devDependencies": {
+    "@types/node": "20.17.0",
+    "@types/proper-lockfile": "4.1.4",
+    "tsc-alias": "1.8.16",
+    "tsx": "4.21.0",
+    "typescript": "5.6.3",
+    "vitest": "4.0.18"
+  }
+}
