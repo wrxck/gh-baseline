@@ -5,7 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![Node ≥20](https://img.shields.io/badge/node-%E2%89%A520-blue.svg)](https://nodejs.org/)
 
-> Profile-driven, idempotent, security-first GitHub account hardening — CLI + MCP server.
+> Profile-driven, idempotent, security-first GitHub account hardening — CLI, interactive TUI, and MCP server.
 
 `gh-baseline` brings every repository in a GitHub account up to a consistent standard
 (branch protection, security features, community files, CI workflows, badges, labels) and
@@ -13,9 +13,29 @@ keeps it there. It does the same job for GitHub that
 [`fleet`](https://github.com/wrxck/fleet) does for Docker apps, or that a hardening MCP
 does for a Cloudflare account.
 
-It runs as both a CLI (for cron and manual use) and an MCP server (for Claude Code).
-The MCP surface is **deliberately narrower than raw Octokit**: the LLM never gets the
-keys to the kingdom.
+It runs three ways:
+
+- **CLI** — for cron, scripts, automation. Programmatic and deterministic: same input, same output.
+- **Interactive TUI** (Ink-based) — for the parts that need human composition: building a new profile, triaging which violations to apply, drilling into scan results.
+- **MCP server** — for Claude Code. The MCP surface is purely programmatic and **deliberately narrower than raw Octokit**: the LLM never gets the keys to the kingdom.
+
+## Design principle: programmatic where it's deterministic, interactive where it's not
+
+Most of what `gh-baseline` does is deterministic: given a profile spec and a repo,
+the diff, the apply, the audit-log entry are all functions of the inputs. Those
+operations live in the CLI and the MCP and never need a human in the loop.
+
+The TUI exists for the genuinely creative parts:
+
+- composing a new profile (`gh-baseline profiles new`)
+- editing an existing profile (`gh-baseline profiles edit <name>`)
+- drilling into a multi-repo scan and choosing which violations to fix
+  (`gh-baseline scan --interactive`)
+- reverse-engineering a profile from a well-tended repo (`gh-baseline profiles reverse <repo>`)
+
+The TUI's output is always a YAML/TS profile file you can commit to a config repo.
+After that, every subsequent run is programmatic: `gh-baseline apply <profile> <repo>`
+behaves identically whether invoked from a terminal, a cron job, or an MCP tool.
 
 ## Why this exists
 
