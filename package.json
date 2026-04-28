@@ -65,7 +65,7 @@
     "@octokit/auth-token": "^5.1.2",
     "@octokit/plugin-retry": "^7.1.4",
     "@octokit/plugin-throttling": "^9.4.0",
-    "@octokit/rest": "^21.0.2",
+    "@octokit/rest": "^22.0.1",
     "ink": "^5.2.1",
     "ink-spinner": "^5.0.0",
     "ink-text-input": "^6.0.0",
