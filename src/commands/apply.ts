@@ -11,41 +11,32 @@ import {
   type ApplyBranchProtectionResult,
   type BranchProtectionRule,
 } from '../actors/apply-branch-protection.js';
+import { getProfile } from '../profiles/index.js';
 
 import type { Octokit } from '@octokit/rest';
 
-// ---------------------------------------------------------------------------
-// Hardcoded oss-public-style rule.
-//
-// TODO(profile-integration): Agent B is building `src/profiles/oss-public.ts`
-// with a real `ProfileSchema`-driven rule loader. Until that lands, we inline
-// a minimal oss-style baseline rule here and accept only `--profile oss-public`
-// (or whatever the configured `defaultProfile` is). When profiles land:
-//   1. Replace `buildRuleFromProfile` with a real profile loader.
-//   2. Validate `--profile` arg against available profile ids.
-//   3. Drive `branch` from the profile rather than defaulting to `main`.
-// ---------------------------------------------------------------------------
-
-const OSS_PUBLIC_RULE: BranchProtectionRule = {
-  required_pull_request_reviews: {
-    required_approving_review_count: 1,
-    dismiss_stale_reviews: true,
-    require_code_owner_reviews: false,
-    require_last_push_approval: false,
-  },
-  required_status_checks: null,
-  enforce_admins: true,
-  required_linear_history: false,
-  allow_force_pushes: false,
-  allow_deletions: false,
-  required_conversation_resolution: true,
-  block_creations: false,
-  lock_branch: false,
-};
-
-export function buildRuleFromProfile(_profileId: string): BranchProtectionRule {
-  // TODO(profile-integration): dispatch on `_profileId` against real profiles.
-  return OSS_PUBLIC_RULE;
+/**
+ * Resolve a profile id to the branch-protection rule for the given branch
+ * (default `main`). Throws via `getProfile` if the profile id is unknown,
+ * and a `GhBaselineError` if the profile has no rule for the branch.
+ *
+ * The profile's `BranchProtectionRule` shape is structurally narrower than
+ * the actor's local one (the actor mirrors GitHub's full PUT shape). The
+ * cast is safe; tightening the profile schema to GitHub's full shape is a
+ * v0.2.0 task.
+ */
+export function buildRuleFromProfile(
+  profileId: string,
+  branch: string = 'main',
+): BranchProtectionRule {
+  const profile = getProfile(profileId);
+  const rule = profile.branchProtection.branches[branch];
+  if (rule === undefined) {
+    throw new GhBaselineError(
+      `profile '${profileId}' has no branch-protection rule for branch '${branch}'`,
+    );
+  }
+  return rule as BranchProtectionRule;
 }
 
 // ---------------------------------------------------------------------------

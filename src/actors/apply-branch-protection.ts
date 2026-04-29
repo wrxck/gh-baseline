@@ -7,11 +7,16 @@ import { assertBranchName, assertOwner, assertRepoName } from '../core/validate.
 // ---------------------------------------------------------------------------
 // Types
 //
-// TODO(profile-integration): once Agent B's `src/profiles/types.ts` lands and
-// exports `BranchProtectionRule`, replace this local interface with an import
-// from there. The shape is intentionally identical to GitHub's
-// `PUT /repos/{owner}/{repo}/branches/{branch}/protection` request body so the
-// swap is mechanical (the field names match the API exactly).
+// Note: the actor's `BranchProtectionRule` is intentionally a *superset* of
+// the profile schema's (`src/profiles/types.ts`). It mirrors GitHub's
+// `PUT /repos/{owner}/{repo}/branches/{branch}/protection` request body
+// exactly, including fields the profile schema doesn't model yet:
+//   - `checks: [{ context, app_id }]` (the modern app-aware status-checks
+//     form; the profile schema only models the legacy `contexts: string[]`)
+//   - `lock_branch`, `block_creations`, `required_signatures`
+// The profile-driven path (`buildRuleFromProfile` in `commands/apply.ts`)
+// produces a value structurally compatible with this wider type. Tightening
+// the profile schema to match GitHub's full PUT shape is a v0.2.0 task.
 // ---------------------------------------------------------------------------
 
 export interface BranchProtectionRequiredPullRequestReviews {

@@ -20,14 +20,11 @@ export interface ProfilesIndexModule {
 }
 
 /**
- * Lazy-import the profiles index. Agent B owns `src/profiles/index.ts`. If
- * the module doesn't exist yet, this falls back to an empty registry rather
- * than crashing the CLI.
+ * Lazy-import the profiles index. The registry lives at `src/profiles/index.ts`
+ * and is bundled with the package, but we keep the import lazy so this command
+ * stays resilient if a downstream consumer customises or removes the registry.
  */
 export async function loadProfilesIndex(): Promise<ProfilesIndexModule> {
-  // Computed specifier so TypeScript doesn't try to resolve the path at
-  // compile time — Agent B owns `src/profiles/index.ts` and may not have
-  // landed it yet.
   const specifier = '../profiles/index.js';
   try {
     const mod = (await import(/* @vite-ignore */ specifier)) as ProfilesIndexModule;

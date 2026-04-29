@@ -13,9 +13,17 @@ import { dirname, extname, join } from 'node:path';
 import * as YAML from 'yaml';
 import { z } from 'zod';
 
-// TODO(integration): swap to imported ProfileSchema once src/profiles/types.ts
-// lands. The local schema kept loose so writes from the builder don't reject
-// fields that aren't yet pinned in the global schema.
+// The store deliberately accepts a loose, additive shape rather than the full
+// `ProfileSchema` from `../profiles/types.js`. Reason: the v0.1.0 TUI builder
+// only fully implements 5 of the 10 wizard steps (identity / metadata / branch
+// protection / review / export). The remaining categories (community files /
+// security features / repo settings / labels / CI) are stubbed; the export
+// step would otherwise reject any partially-built profile.
+//
+// When the remaining builder steps land (v0.2.0), swap this for a strict
+// `ProfileSchema.parse(...)` to catch any drift between the builder output and
+// the canonical profile shape. The id/name/description constraints below
+// match the canonical schema exactly so a tighter swap is mechanical.
 const LocalProfileSchema = z
   .object({
     id: z.string().regex(/^[a-z][a-z0-9-]{0,40}$/),
