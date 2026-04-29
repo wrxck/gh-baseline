@@ -58,6 +58,8 @@ export async function run(argv: string[]): Promise<void> {
     return;
   }
 
+  const json = args.includes('--json');
+
   switch (command) {
     case 'mcp': {
       const { startMcpServer } = await import('./mcp/server.js');
@@ -67,9 +69,62 @@ export async function run(argv: string[]): Promise<void> {
       const { launchTui } = await import('./tui/app.js');
       return launchTui();
     }
-    case 'apply': {
-      const { runApply } = await import('./commands/apply.js');
-      await runApply(args.slice(1));
+    case 'doctor': {
+      const { doctor } = await import('./commands/doctor.js');
+      const code = await doctor({ json });
+      if (code !== 0) process.exit(code);
+      return;
+    }
+    case 'init': {
+      const { init } = await import('./commands/init.js');
+      const force = args.includes('--force');
+      const code = await init({ json, force });
+      if (code !== 0) process.exit(code);
+      return;
+    }
+    case 'audit': {
+      const { auditCommand } = await import('./commands/audit.js');
+      const tail = readNumberFlag(args, '--tail');
+      const since = readStringFlag(args, '--since');
+      const tool = readStringFlag(args, '--tool');
+      const repo = readStringFlag(args, '--repo');
+      const code = await auditCommand({
+        json,
+        ...(tail !== undefined ? { tail } : {}),
+        ...(since !== undefined ? { since } : {}),
+        ...(tool !== undefined ? { tool } : {}),
+        ...(repo !== undefined ? { repo } : {}),
+      });
+      if (code !== 0) process.exit(code);
+      return;
+    }
+    case 'profiles': {
+      const sub = args[1];
+      const { profilesList, profilesShow, profilesPlaceholder } = await import(
+        './commands/profiles.js'
+      );
+      if (sub === undefined || sub === 'list') {
+        const code = await profilesList({ json });
+        if (code !== 0) process.exit(code);
+        return;
+      }
+      if (sub === 'show') {
+        const id = args[2];
+        if (!id) {
+          process.stderr.write('Usage: gh-baseline profiles show <id>\n');
+          process.exit(1);
+        }
+        const code = await profilesShow(id, { json });
+        if (code !== 0) process.exit(code);
+        return;
+      }
+      if (sub === 'new' || sub === 'edit') {
+        const code = await profilesPlaceholder(sub);
+        if (code !== 0) process.exit(code);
+        return;
+      }
+      process.stderr.write(`Unknown profiles subcommand: ${sub}\n`);
+      process.exit(1);
       return;
     }
     case 'scan': {
@@ -77,10 +132,37 @@ export async function run(argv: string[]): Promise<void> {
       await scanCommand(args.slice(1));
       return;
     }
-    // Other commands are wired in by Agent D.
+    case 'apply': {
+      const { runApply } = await import('./commands/apply.js');
+      await runApply(args.slice(1));
+      return;
+    }
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
       process.stdout.write(HELP);
       process.exit(1);
   }
+}
+
+/** Read `--flag value` or `--flag=value` from argv. */
+function readStringFlag(args: string[], flag: string): string | undefined {
+  for (let i = 0; i < args.length; i += 1) {
+    const a = args[i];
+    if (a === flag) {
+      const next = args[i + 1];
+      if (next !== undefined && !next.startsWith('--')) return next;
+      return undefined;
+    }
+    if (a !== undefined && a.startsWith(flag + '=')) {
+      return a.slice(flag.length + 1);
+    }
+  }
+  return undefined;
+}
+
+function readNumberFlag(args: string[], flag: string): number | undefined {
+  const raw = readStringFlag(args, flag);
+  if (raw === undefined) return undefined;
+  const n = Number(raw);
+  return Number.isFinite(n) ? n : undefined;
 }
