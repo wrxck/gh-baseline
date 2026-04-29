@@ -2,174 +2,103 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import type { Octokit } from '@octokit/rest';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  type ApplyBranchProtectionInput,
-  type ApplyBranchProtectionResult,
-  type BranchProtectionRule,
-} from '../actors/apply-branch-protection.js';
-import { defaultConfig, type Config } from '../core/config.js';
+import { buildFakeOctokit, notFoundError, res } from '../checks/test-helpers.js';
+import { defaultConfig } from '../core/config.js';
 
-import { registerBranchProtectionTools } from './server.js';
+import { registerScanTools } from './server.js';
 
-let tmpDir: string;
-let originalEnv: string | undefined;
+interface RegisteredTool {
+  description?: string;
+  handler: (args: Record<string, unknown>, extra: unknown) => Promise<{ content?: Array<{ type: string; text: string }>; isError?: boolean }>;
+}
+
+function registeredToolsOf(server: McpServer): Map<string, RegisteredTool> {
+  // McpServer exposes its registered tools as `_registeredTools` (private).
+  // Cast carefully — this is test-only introspection.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const map = (server as any)._registeredTools as Record<string, RegisteredTool>;
+  return new Map(Object.entries(map));
+}
+
+let tmp: string;
+let prevAuditEnv: string | undefined;
 
 beforeEach(() => {
-  tmpDir = mkdtempSync(join(tmpdir(), 'gh-baseline-mcp-'));
-  originalEnv = process.env.GH_BASELINE_AUDIT_PATH;
-  process.env.GH_BASELINE_AUDIT_PATH = join(tmpDir, 'audit.jsonl');
+  tmp = mkdtempSync(join(tmpdir(), 'gh-baseline-mcp-'));
+  prevAuditEnv = process.env.GH_BASELINE_AUDIT_PATH;
+  process.env.GH_BASELINE_AUDIT_PATH = join(tmp, 'audit.jsonl');
 });
 
 afterEach(() => {
-  if (originalEnv === undefined) delete process.env.GH_BASELINE_AUDIT_PATH;
-  else process.env.GH_BASELINE_AUDIT_PATH = originalEnv;
-  rmSync(tmpDir, { recursive: true, force: true });
+  if (prevAuditEnv === undefined) delete process.env.GH_BASELINE_AUDIT_PATH;
+  else process.env.GH_BASELINE_AUDIT_PATH = prevAuditEnv;
+  rmSync(tmp, { recursive: true, force: true });
 });
 
-function makeConfig(): Config {
-  return { ...defaultConfig(), allowedRepos: ['acme/widgets'] };
-}
-
-function makeServer(): McpServer {
-  return new McpServer({ name: 'gh-baseline-test', version: '0.0.0' });
-}
-
-describe('registerBranchProtectionTools', () => {
-  it('registers without throwing', () => {
-    const server = makeServer();
-    expect(() => registerBranchProtectionTools(server)).not.toThrow();
+describe('registerScanTools', () => {
+  it('registers gh_baseline_scan_repo and gh_baseline_diff_against_profile', () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    registerScanTools(server, {
+      octokit: buildFakeOctokit(),
+      config: { ...defaultConfig(), unsafeAllowAll: true },
+    });
+    const tools = registeredToolsOf(server);
+    expect(tools.has('gh_baseline_scan_repo')).toBe(true);
+    expect(tools.has('gh_baseline_diff_against_profile')).toBe(true);
   });
 
-  it('apply tool: invokes underlying actor with dryRun default true', async () => {
-    const server = makeServer();
-    const apply = vi.fn(
-      async (_input: ApplyBranchProtectionInput): Promise<ApplyBranchProtectionResult> => ({
-        changed: true,
-        diff: [{ field: 'enforce_admins', before: false, after: true }],
-        before: { enforce_admins: false },
-        after: null,
-      }),
-    );
-    registerBranchProtectionTools(server, {
-      loadConfig: () => makeConfig(),
-      buildOctokit: async () => ({}) as unknown as Octokit,
-      applyBranchProtection: apply,
-      buildRuleFromProfile: (): BranchProtectionRule => ({ enforce_admins: true }),
+  it('gh_baseline_scan_repo invokes the registered handler and returns JSON content', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    registerScanTools(server, {
+      octokit: buildFakeOctokit(),
+      config: { ...defaultConfig(), unsafeAllowAll: true },
     });
-
-    // Reach into the registered tool callback. McpServer doesn't expose a
-    // public "call this tool" hook for in-process use, so we invoke via the
-    // internal _registeredTools map. This is fine for tests — we own the
-    // server object.
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra?: unknown) => Promise<unknown> }> })._registeredTools;
-    const applyTool = tools['gh_baseline_apply_branch_protection'];
-    expect(applyTool).toBeDefined();
-
-    const result = (await applyTool!.handler(
-      { repo: 'acme/widgets', branch: 'main', dryRun: true },
-      {},
-    )) as { structuredContent?: { changed: boolean }; isError?: boolean };
-
-    expect(result.isError).toBeFalsy();
-    expect(result.structuredContent?.changed).toBe(true);
-    expect(apply).toHaveBeenCalledTimes(1);
-    expect(apply.mock.calls[0]![0].dryRun).toBe(true);
+    const tools = registeredToolsOf(server);
+    const tool = tools.get('gh_baseline_scan_repo');
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({ repo: 'acme/widgets' }, {});
+    expect(result.isError).not.toBe(true);
+    expect(result.content?.[0].type).toBe('text');
+    const parsed = JSON.parse(result.content![0].text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const r of parsed) {
+      expect(r).toHaveProperty('id');
+      expect(r).toHaveProperty('status');
+    }
   });
 
-  it('apply tool: dryRun:false is honoured', async () => {
-    const server = makeServer();
-    const apply = vi.fn(
-      async (_input: ApplyBranchProtectionInput): Promise<ApplyBranchProtectionResult> => ({
-        changed: true,
-        diff: [{ field: 'enforce_admins', before: false, after: true }],
-        before: null,
-        after: { enforce_admins: true },
-      }),
-    );
-    registerBranchProtectionTools(server, {
-      loadConfig: () => makeConfig(),
-      buildOctokit: async () => ({}) as unknown as Octokit,
-      applyBranchProtection: apply,
-      buildRuleFromProfile: () => ({ enforce_admins: true }),
+  it('gh_baseline_diff_against_profile returns only failing/erroring entries', async () => {
+    const fakeOcto = buildFakeOctokit({
+      branches: {
+        'acme/widgets': {
+          main: { responses: [notFoundError()] },
+        },
+      },
+      repos: { 'acme/widgets': res({}) },
     });
-
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra?: unknown) => Promise<unknown> }> })._registeredTools;
-    await tools['gh_baseline_apply_branch_protection']!.handler(
-      { repo: 'acme/widgets', branch: 'main', dryRun: false },
-      {},
-    );
-    expect(apply.mock.calls[0]![0].dryRun).toBe(false);
-  });
-
-  it('diff tool: forces dryRun=true and omits "after"', async () => {
-    const server = makeServer();
-    const apply = vi.fn(
-      async (_input: ApplyBranchProtectionInput): Promise<ApplyBranchProtectionResult> => ({
-        changed: true,
-        diff: [{ field: 'enforce_admins', before: false, after: true }],
-        before: { enforce_admins: false },
-        after: null,
-      }),
-    );
-    registerBranchProtectionTools(server, {
-      loadConfig: () => makeConfig(),
-      buildOctokit: async () => ({}) as unknown as Octokit,
-      applyBranchProtection: apply,
-      buildRuleFromProfile: () => ({ enforce_admins: true }),
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    registerScanTools(server, {
+      octokit: fakeOcto,
+      config: { ...defaultConfig(), unsafeAllowAll: true },
     });
-
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra?: unknown) => Promise<unknown> }> })._registeredTools;
-    const diffTool = tools['gh_baseline_diff_branch_protection'];
-    expect(diffTool).toBeDefined();
-
-    const result = (await diffTool!.handler(
-      { repo: 'acme/widgets', branch: 'main' },
-      {},
-    )) as {
-      structuredContent?: Record<string, unknown>;
-      isError?: boolean;
+    const tools = registeredToolsOf(server);
+    const tool = tools.get('gh_baseline_diff_against_profile');
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({ repo: 'acme/widgets' }, {});
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(result.content![0].text) as {
+      repo: string;
+      profile: string;
+      failing: Array<{ status: string }>;
     };
-
-    expect(result.isError).toBeFalsy();
-    expect(result.structuredContent).toBeDefined();
-    expect(Object.keys(result.structuredContent!)).toEqual(['changed', 'diff', 'before']);
-    expect(apply.mock.calls[0]![0].dryRun).toBe(true);
-  });
-
-  it('apply tool: invalid repo slug → isError', async () => {
-    const server = makeServer();
-    registerBranchProtectionTools(server, {
-      loadConfig: () => makeConfig(),
-    });
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra?: unknown) => Promise<unknown> }> })._registeredTools;
-    // The McpServer auto-validates inputSchema; calling with an invalid slug
-    // should surface as an error to the caller. We invoke the callback
-    // directly here, but the callback also re-runs assertions inside, so
-    // either layer rejects.
-    const result = (await tools['gh_baseline_apply_branch_protection']!.handler(
-      { repo: 'not a slug', branch: 'main', dryRun: true },
-      {},
-    )) as { isError?: boolean };
-    expect(result.isError).toBe(true);
-  });
-
-  it('apply tool: repo not in allowlist → isError', async () => {
-    const server = makeServer();
-    registerBranchProtectionTools(server, {
-      loadConfig: () => makeConfig(),
-      buildOctokit: async () => ({}) as unknown as Octokit,
-      applyBranchProtection: vi.fn(),
-      buildRuleFromProfile: () => ({ enforce_admins: true }),
-    });
-    const tools = (server as unknown as { _registeredTools: Record<string, { handler: (args: unknown, extra?: unknown) => Promise<unknown> }> })._registeredTools;
-    const result = (await tools['gh_baseline_apply_branch_protection']!.handler(
-      { repo: 'evil/repo', branch: 'main', dryRun: true },
-      {},
-    )) as { isError?: boolean };
-    expect(result.isError).toBe(true);
+    expect(payload.repo).toBe('acme/widgets');
+    // Every failing entry must be 'fail' or 'error' (no passes leaked in).
+    expect(payload.failing.every((f) => f.status === 'fail' || f.status === 'error')).toBe(true);
+    expect(payload.failing.length).toBeGreaterThan(0);
   });
 });

@@ -12,14 +12,17 @@ import {
   type ApplyBranchProtectionResult,
   type BranchProtectionRule,
 } from '../actors/apply-branch-protection.js';
+import { runChecks, type CheckResult } from '../checks/index.js';
 import { buildRuleFromProfile } from '../commands/apply.js';
 import { checkAllowed } from '../core/allowlist.js';
+import { auditLog } from '../core/audit.js';
 import { getToken } from '../core/auth.js';
 import { loadConfig, type Config } from '../core/config.js';
 import { GhBaselineError } from '../core/errors.js';
 import { createOctokit } from '../core/octokit.js';
 import { createRateLimiter } from '../core/ratelimit.js';
 import { assertBranchName, assertRepoSlug } from '../core/validate.js';
+import { getProfile } from '../profiles/index.js';
 
 // ---------------------------------------------------------------------------
 // DI seam — swappable in tests so we can register tools and exercise their
@@ -33,13 +36,28 @@ export interface RegisterToolsDeps {
   buildRuleFromProfile?: (profileId: string) => BranchProtectionRule;
 }
 
+export interface RegisterScanToolsDeps {
+  /** Inject an octokit (tests). When set, on-disk auth is bypassed. */
+  octokit?: Octokit;
+  /** Inject a config (tests). When set, the on-disk config is not loaded. */
+  config?: Config;
+}
+
 async function defaultBuildOctokit(config: Config): Promise<Octokit> {
   const tok = await getToken(config);
   return createOctokit(tok.token);
 }
 
-// Zod schema for the shared input shape. Keep it local — these are the MCP
-// tool's input contracts, not part of the public API.
+async function resolveScanDeps(
+  deps: RegisterScanToolsDeps,
+): Promise<{ octokit: Octokit; config: Config }> {
+  const config = deps.config ?? loadConfig();
+  if (deps.octokit) return { octokit: deps.octokit, config };
+  const tok = await getToken(config);
+  return { octokit: createOctokit(tok.token), config };
+}
+
+// Zod schemas for the apply/diff tool inputs.
 const repoSchema = z
   .string()
   .min(1)
@@ -67,6 +85,11 @@ const branchSchema = z
       });
     }
   });
+
+const ScanToolInputShape = {
+  repo: z.string(),
+  profile: z.string().optional(),
+} as const;
 
 interface RunToolArgs {
   repo: string;
@@ -100,10 +123,89 @@ async function executeApplyBranchProtection(
   });
 }
 
-/**
- * Register the apply/diff branch-protection tools on `server`. Exported so
- * tests can register against a server they own without spinning up stdio.
- */
+// ---------------------------------------------------------------------------
+// Tier 1 — read-only scan/diff
+// ---------------------------------------------------------------------------
+
+export function registerScanTools(server: McpServer, deps: RegisterScanToolsDeps = {}): void {
+  server.registerTool(
+    'gh_baseline_scan_repo',
+    {
+      description:
+        'Run every read-only baseline check against a repository and return the structured CheckResult[] as JSON.',
+      inputSchema: ScanToolInputShape,
+    },
+    async (args) => {
+      const repo = args.repo;
+      assertRepoSlug(repo);
+      const { octokit, config } = await resolveScanDeps(deps);
+      checkAllowed(repo, config);
+      const profile = getProfile(args.profile ?? config.defaultProfile);
+      let results: CheckResult[] = [];
+      let errMsg: string | undefined;
+      try {
+        results = await runChecks(octokit, repo, profile);
+      } catch (err) {
+        errMsg = err instanceof Error ? err.message : String(err);
+      }
+      await auditLog({
+        tool: 'mcp.gh_baseline_scan_repo',
+        repo,
+        args: { profile: profile.id },
+        result: errMsg === undefined ? 'ok' : 'error',
+        ...(errMsg !== undefined ? { error: errMsg } : {}),
+        dryRun: true,
+      }).catch(() => undefined);
+      if (errMsg !== undefined) {
+        return { content: [{ type: 'text', text: errMsg }], isError: true };
+      }
+      return { content: [{ type: 'text', text: JSON.stringify(results) }] };
+    },
+  );
+
+  server.registerTool(
+    'gh_baseline_diff_against_profile',
+    {
+      description:
+        'Run baseline checks and return only the failing/erroring CheckResult entries, ' +
+        'i.e. the actionable drift between the repository and the profile.',
+      inputSchema: ScanToolInputShape,
+    },
+    async (args) => {
+      const repo = args.repo;
+      assertRepoSlug(repo);
+      const { octokit, config } = await resolveScanDeps(deps);
+      checkAllowed(repo, config);
+      const profile = getProfile(args.profile ?? config.defaultProfile);
+      let failing: CheckResult[] = [];
+      let errMsg: string | undefined;
+      try {
+        const all = await runChecks(octokit, repo, profile);
+        failing = all.filter((r) => r.status === 'fail' || r.status === 'error');
+      } catch (err) {
+        errMsg = err instanceof Error ? err.message : String(err);
+      }
+      await auditLog({
+        tool: 'mcp.gh_baseline_diff_against_profile',
+        repo,
+        args: { profile: profile.id },
+        result: errMsg === undefined ? 'ok' : 'error',
+        ...(errMsg !== undefined ? { error: errMsg } : {}),
+        dryRun: true,
+      }).catch(() => undefined);
+      if (errMsg !== undefined) {
+        return { content: [{ type: 'text', text: errMsg }], isError: true };
+      }
+      const payload = { repo, profile: profile.id, failing };
+      return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tier 3 — branch protection apply/diff
+// ---------------------------------------------------------------------------
+
 export function registerBranchProtectionTools(
   server: McpServer,
   deps: RegisterToolsDeps = {},
@@ -167,7 +269,6 @@ export function registerBranchProtectionTools(
           },
           deps,
         );
-        // Strip `after` per spec — diff tool returns the diff + before only.
         const diffOnly = {
           changed: result.changed,
           diff: result.diff,
@@ -197,9 +298,9 @@ export async function startMcpServer(): Promise<void> {
     version: pkg.version,
   });
 
-  // Tools are registered by Agent D in commands/ and actors/. The placeholder
-  // below documents the contract: scan/diff/apply, all with dryRun defaults.
+  registerScanTools(server);
   registerBranchProtectionTools(server);
+  // Other tools (doctor/audit/profiles) registered by #16's branch.
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
