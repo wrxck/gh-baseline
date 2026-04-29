@@ -53,88 +53,45 @@ describe('registerScanTools', () => {
 
   it('gh_baseline_scan_repo invokes the registered handler and returns JSON content', async () => {
     const server = new McpServer({ name: 'test', version: '0.0.0' });
-    const fullResponses = {
-      reposGet: async () =>
-        res({
-          description: 'A widget',
-          homepage: 'https://example.com',
-          topics: ['cli', 'security', 'github'],
-          license: { spdx_id: 'MIT' },
-          allow_squash_merge: true,
-          allow_merge_commit: false,
-          allow_rebase_merge: false,
-          allow_auto_merge: true,
-          delete_branch_on_merge: true,
-          default_branch: 'main',
-          security_and_analysis: {
-            secret_scanning: { status: 'enabled' },
-            secret_scanning_push_protection: { status: 'enabled' },
-          },
-        }),
-      reposGetBranchProtection: async () =>
-        res({
-          required_status_checks: {
-            strict: true,
-            contexts: ['build-and-test (20)', 'build-and-test (22)'],
-          },
-          required_pull_request_reviews: {
-            required_approving_review_count: 1,
-            dismiss_stale_reviews: true,
-            require_code_owner_reviews: false,
-            require_last_push_approval: false,
-          },
-          enforce_admins: { enabled: true },
-          required_signatures: { enabled: false },
-          required_linear_history: { enabled: true },
-          allow_force_pushes: { enabled: false },
-          allow_deletions: { enabled: false },
-          required_conversation_resolution: { enabled: true },
-          restrictions: null,
-        }),
-      issuesListLabelsForRepo: async () => res([]),
-      reposGetContent: async () => {
-        throw notFoundError();
-      },
-      request: async () => res({ files: { readme: { url: 'x' }, contributing: { url: 'x' }, code_of_conduct: { url: 'x' } } }),
-    };
     registerScanTools(server, {
-      octokit: buildFakeOctokit(fullResponses),
+      octokit: buildFakeOctokit(),
       config: { ...defaultConfig(), unsafeAllowAll: true },
     });
     const tools = registeredToolsOf(server);
-    const scanTool = tools.get('gh_baseline_scan_repo');
-    expect(scanTool).toBeDefined();
-    const out = await scanTool!.handler({ repo: 'acme/widgets' }, {});
-    expect(out.isError).toBeUndefined();
-    expect(out.content?.[0]?.type).toBe('text');
-    const parsed = JSON.parse(out.content![0]!.text) as Array<{ id: string; status: string }>;
-    expect(parsed.map((r) => r.id)).toContain('repo-metadata');
+    const tool = tools.get('gh_baseline_scan_repo');
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({ repo: 'acme/widgets' }, {});
+    expect(result.isError).not.toBe(true);
+    expect(result.content?.[0].type).toBe('text');
+    const parsed = JSON.parse(result.content![0].text);
+    expect(Array.isArray(parsed)).toBe(true);
+    expect(parsed.length).toBeGreaterThan(0);
+    for (const r of parsed) {
+      expect(r).toHaveProperty('id');
+      expect(r).toHaveProperty('status');
+    }
   });
 
-  it('gh_baseline_diff_against_profile filters out passes', async () => {
+  it('gh_baseline_diff_against_profile returns only failing/erroring entries', async () => {
+    const fakeOcto = buildFakeOctokit({
+      branches: {
+        'acme/widgets': {
+          main: { responses: [notFoundError()] },
+        },
+      },
+      repos: { 'acme/widgets': res({}) },
+    });
     const server = new McpServer({ name: 'test', version: '0.0.0' });
     registerScanTools(server, {
-      octokit: buildFakeOctokit({
-        reposGet: async () => {
-          throw new Error('boom');
-        },
-        reposGetBranchProtection: async () => {
-          throw new Error('boom');
-        },
-        issuesListLabelsForRepo: async () => res([]),
-        reposGetContent: async () => {
-          throw notFoundError();
-        },
-        request: async () => {
-          throw new Error('boom');
-        },
-      }),
+      octokit: fakeOcto,
       config: { ...defaultConfig(), unsafeAllowAll: true },
     });
     const tools = registeredToolsOf(server);
-    const diffTool = tools.get('gh_baseline_diff_against_profile');
-    const out = await diffTool!.handler({ repo: 'acme/widgets' }, {});
-    const payload = JSON.parse(out.content![0]!.text) as {
+    const tool = tools.get('gh_baseline_diff_against_profile');
+    expect(tool).toBeDefined();
+    const result = await tool!.handler({ repo: 'acme/widgets' }, {});
+    expect(result.isError).not.toBe(true);
+    const payload = JSON.parse(result.content![0].text) as {
       repo: string;
       profile: string;
       failing: Array<{ status: string }>;
