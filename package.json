@@ -78,6 +78,7 @@
     "@types/node": "20.17.0",
     "@types/proper-lockfile": "4.1.4",
     "@types/react": "^18.3.28",
+    "@vitest/coverage-v8": "^4.0.18",
     "ink-testing-library": "^4.0.0",
     "tsc-alias": "1.8.16",
     "tsx": "4.21.0",

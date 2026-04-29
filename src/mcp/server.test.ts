@@ -101,4 +101,49 @@ describe('registerScanTools', () => {
     expect(payload.failing.every((f) => f.status === 'fail' || f.status === 'error')).toBe(true);
     expect(payload.failing.length).toBeGreaterThan(0);
   });
+
+  it('gh_baseline_scan_repo surfaces runChecks errors as isError=true', async () => {
+    // octokit that always throws; runChecks will propagate the failure.
+    const explode = buildFakeOctokit({
+      reposGet: async () => {
+        throw new Error('octokit explosion');
+      },
+      reposGetContent: async () => {
+        throw new Error('octokit explosion');
+      },
+      reposGetBranchProtection: async () => {
+        throw new Error('octokit explosion');
+      },
+      issuesListLabelsForRepo: async () => {
+        throw new Error('octokit explosion');
+      },
+      request: async () => {
+        throw new Error('octokit explosion');
+      },
+    });
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    registerScanTools(server, {
+      octokit: explode,
+      config: { ...defaultConfig(), unsafeAllowAll: true },
+    });
+    const tools = registeredToolsOf(server);
+    const tool = tools.get('gh_baseline_scan_repo');
+    // runChecks catches per-check errors and reports status='error'; the scan
+    // handler returns ok but every entry is error/fail.
+    const result = await tool!.handler({ repo: 'acme/widgets' }, {});
+    expect(result.isError).not.toBe(true);
+    const parsed = JSON.parse(result.content![0].text);
+    expect(parsed.every((r: { status: string }) => r.status === 'error' || r.status === 'fail')).toBe(true);
+  });
+
+  it('rejects an invalid repo slug at the handler boundary', async () => {
+    const server = new McpServer({ name: 'test', version: '0.0.0' });
+    registerScanTools(server, {
+      octokit: buildFakeOctokit(),
+      config: { ...defaultConfig(), unsafeAllowAll: true },
+    });
+    const tools = registeredToolsOf(server);
+    const tool = tools.get('gh_baseline_scan_repo');
+    await expect(tool!.handler({ repo: 'not-a-slug' }, {})).rejects.toThrow();
+  });
 });

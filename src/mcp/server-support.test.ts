@@ -55,6 +55,20 @@ describe('registerSupportTools', () => {
     expect(Object.keys(schema).sort()).toEqual(['count', 'repo', 'tool']);
   });
 
+  it('audit_tail handler returns a structured view payload', async () => {
+    const { tools, asMcp } = makeFakeServer();
+    registerSupportTools(asMcp);
+    const tail = tools.find((t) => t.name === 'gh_baseline_audit_tail');
+    const result = (await tail!.handler({ count: 5 })) as {
+      content: { type: string; text: string }[];
+      structuredContent: Record<string, unknown>;
+    };
+    expect(result.content[0]?.type).toBe('text');
+    const parsed = JSON.parse(result.content[0].text);
+    expect(parsed).toHaveProperty('entries');
+    expect(parsed).toHaveProperty('total');
+  });
+
   it('list_profiles handler returns a JSON payload (empty registry note)', async () => {
     const { tools, asMcp } = makeFakeServer();
     registerSupportTools(asMcp);
