@@ -4,9 +4,15 @@ updates:
     directory: /
     schedule:
       interval: weekly
-    open-pull-requests-limit: 10
+    open-pull-requests-limit: 5
     labels:
       - dependencies
+    # Hold majors until v0.1.0 ships and the API surface stabilises.
+    # After release, drop this ignore block to opt back in.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
+
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -14,3 +20,7 @@ updates:
     labels:
       - dependencies
       - github-actions
+    # Same rationale — pinned to v4 for now per chore/ci-hardening pattern.
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
