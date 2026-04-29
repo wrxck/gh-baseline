@@ -62,7 +62,7 @@
     "@matthesketh/ink-toast": "^0.1.0",
     "@matthesketh/ink-viewport": "^0.1.0",
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@octokit/auth-token": "^5.1.2",
+    "@octokit/auth-token": "^6.0.0",
     "@octokit/plugin-retry": "^7.1.4",
     "@octokit/plugin-throttling": "^9.4.0",
     "@octokit/rest": "^21.0.2",
