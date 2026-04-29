@@ -67,6 +67,11 @@ export async function run(argv: string[]): Promise<void> {
       const { launchTui } = await import('./tui/app.js');
       return launchTui();
     }
+    case 'apply': {
+      const { runApply } = await import('./commands/apply.js');
+      await runApply(args.slice(1));
+      return;
+    }
     case 'scan': {
       const { scanCommand } = await import('./commands/scan.js');
       await scanCommand(args.slice(1));
