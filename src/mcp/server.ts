@@ -17,7 +17,7 @@ import { buildRuleFromProfile } from '../commands/apply.js';
 import { buildAuditView } from '../commands/audit.js';
 import { buildDoctorReport } from '../commands/doctor.js';
 import { listProfiles } from '../commands/profiles.js';
-import { checkAllowed } from '../core/allowlist.js';
+import { checkAllowed, isUnsafeAllowAll } from '../core/allowlist.js';
 import { auditLog } from '../core/audit.js';
 import { getToken } from '../core/auth.js';
 import { loadConfig, type Config } from '../core/config.js';
@@ -63,6 +63,7 @@ async function resolveScanDeps(
 const repoSchema = z
   .string()
   .min(1)
+  .max(140)
   .superRefine((v, ctx) => {
     try {
       assertRepoSlug(v);
@@ -77,6 +78,7 @@ const repoSchema = z
 const branchSchema = z
   .string()
   .min(1)
+  .max(255)
   .superRefine((v, ctx) => {
     try {
       assertBranchName(v);
@@ -89,8 +91,8 @@ const branchSchema = z
   });
 
 const ScanToolInputShape = {
-  repo: z.string(),
-  profile: z.string().optional(),
+  repo: repoSchema,
+  profile: z.string().min(1).max(100).optional(),
 } as const;
 
 interface RunToolArgs {
@@ -321,9 +323,10 @@ export function registerSupportTools(server: McpServer): void {
         'Return the most recent gh-baseline audit log entries. Optional `count` (default 20), `tool`, and `repo` filters.',
       inputSchema: {
         count: z.number().int().positive().max(1000).optional(),
-        tool: z.string().optional(),
+        tool: z.string().min(1).max(100).optional(),
         repo: z
           .string()
+          .max(140)
           .optional()
           .refine(
             (v) => {
@@ -380,6 +383,17 @@ export function registerSupportTools(server: McpServer): void {
 export async function startMcpServer(): Promise<void> {
   const __dirname = dirname(fileURLToPath(import.meta.url));
   const pkg = JSON.parse(readFileSync(join(__dirname, '..', '..', 'package.json'), 'utf-8'));
+
+  try {
+    const cfg = loadConfig();
+    if (isUnsafeAllowAll(cfg)) {
+      process.stderr.write(
+        'gh-baseline: WARNING — unsafeAllowAll is enabled; allowlist is bypassed for all MCP tools\n',
+      );
+    }
+  } catch {
+    // config load errors are surfaced by doctor/scan handlers; don't block startup
+  }
 
   const server = new McpServer({
     name: 'gh-baseline',

@@ -204,4 +204,18 @@ describe('doctor (CLI entrypoint)', () => {
     });
     expect(code).toBe(1);
   });
+
+  it('emits a warning when unsafeAllowAll is enabled', async () => {
+    saveConfig({ ...defaultConfig(), unsafeAllowAll: true });
+    const report = await buildDoctorReport({
+      deps: {
+        resolveToken: async (): Promise<ResolvedToken> => ({
+          token: 't',
+          source: 'gh-cli',
+          scopes: ['repo'],
+        }),
+      },
+    });
+    expect(report.warnings.some((w) => /unsafeAllowAll/.test(w))).toBe(true);
+  });
 });
