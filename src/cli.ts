@@ -127,7 +127,12 @@ export async function run(argv: string[]): Promise<void> {
       process.exit(1);
       return;
     }
-    // Other commands (scan, apply) are wired in by Agents B and C.
+    case 'scan': {
+      const { scanCommand } = await import('./commands/scan.js');
+      await scanCommand(args.slice(1));
+      return;
+    }
+    // 'apply' is wired in by feat/apply-branch-protection (#14).
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
       process.stdout.write(HELP);
