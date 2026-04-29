@@ -4,7 +4,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { getToken, parseGhScopes, requireScopes, type RunCmd } from './auth.js';
+import { getToken, parseGhScopes, redactStderr, requireScopes, type RunCmd } from './auth.js';
 import { defaultConfig, type Config } from './config.js';
 import { AuthError, ScopeError } from './errors.js';
 
@@ -136,10 +136,19 @@ describe('getToken (pat mode)', () => {
     ).rejects.toBeInstanceOf(AuthError);
   });
 
-  it('warns to stderr when PAT file mode is looser than 0600', async () => {
+  it('refuses to load when PAT file has loose permissions (group/other bits)', async () => {
     const patPath = join(tmp, 'loose');
     writeFileSync(patPath, 'ghp_x', { mode: 0o644 });
     chmodSync(patPath, 0o644);
+    await expect(
+      getToken(cfg({ auth: { mode: 'pat', patPath } })),
+    ).rejects.toThrow(/loose permissions \(644\)/);
+  });
+
+  it('warns to stderr when PAT file is owner-only but not exactly 0600', async () => {
+    const patPath = join(tmp, 'owner-strict');
+    writeFileSync(patPath, 'ghp_x', { mode: 0o400 });
+    chmodSync(patPath, 0o400);
     const fetchImpl: typeof fetch = async () =>
       new Response('{}', { status: 200, headers: { 'x-oauth-scopes': 'repo' } });
 
@@ -155,6 +164,47 @@ describe('getToken (pat mode)', () => {
     } finally {
       (process.stderr.write as unknown) = original;
     }
-    expect(writes.join('')).toMatch(/mode 644/);
+    expect(writes.join('')).toMatch(/mode 400/);
+  });
+});
+
+describe('redactStderr', () => {
+  it('caps long input', async () => {
+    const { redactStderr } = await import('./auth.js');
+    const long = 'x'.repeat(500);
+    const out = redactStderr(long, 200);
+    expect(out.length).toBeLessThanOrEqual(201);
+    expect(out.endsWith('…')).toBe(true);
+  });
+
+  it('redacts ghp_/ghs_ token-shaped substrings', async () => {
+    const { redactStderr } = await import('./auth.js');
+    const out = redactStderr('error: ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAA leaked');
+    expect(out).not.toMatch(/ghp_AAA/);
+    expect(out).toMatch(/\[REDACTED\]/);
+  });
+});
+
+describe('getToken (gh-cli scope parse warning)', () => {
+  it('warns when gh succeeds but scopes parse is empty', async () => {
+    const runCmd: RunCmd = async (_cmd, args) => {
+      if (args[0] === 'auth' && args[1] === 'token') {
+        return { stdout: 'ghp_fake', stderr: '', exitCode: 0 };
+      }
+      return { stdout: '', stderr: 'unparseable output\n', exitCode: 0 };
+    };
+    const writes: string[] = [];
+    const original = process.stderr.write.bind(process.stderr);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (process.stderr.write as unknown) = (chunk: unknown) => {
+      writes.push(typeof chunk === 'string' ? chunk : String(chunk));
+      return true;
+    };
+    try {
+      await getToken(cfg(), { runCmd });
+    } finally {
+      (process.stderr.write as unknown) = original;
+    }
+    expect(writes.join('')).toMatch(/could not parse scopes/);
   });
 });

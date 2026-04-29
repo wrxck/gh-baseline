@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
+import { z } from 'zod';
+
 import { registerSupportTools } from './server.js';
 
 interface RegisteredTool {
@@ -53,6 +55,25 @@ describe('registerSupportTools', () => {
     expect(tail).toBeDefined();
     const schema = tail!.config.inputSchema!;
     expect(Object.keys(schema).sort()).toEqual(['count', 'repo', 'tool']);
+  });
+
+  it('audit_tail tool filter rejects strings over 100 chars and empty strings', () => {
+    const { tools, asMcp } = makeFakeServer();
+    registerSupportTools(asMcp);
+    const tail = tools.find((t) => t.name === 'gh_baseline_audit_tail');
+    const toolFilter = tail!.config.inputSchema!.tool as z.ZodTypeAny;
+    expect(toolFilter.safeParse('').success).toBe(false);
+    expect(toolFilter.safeParse('a'.repeat(101)).success).toBe(false);
+    expect(toolFilter.safeParse('mcp.gh_baseline_scan_repo').success).toBe(true);
+  });
+
+  it('audit_tail repo filter rejects strings over 140 chars', () => {
+    const { tools, asMcp } = makeFakeServer();
+    registerSupportTools(asMcp);
+    const tail = tools.find((t) => t.name === 'gh_baseline_audit_tail');
+    const repoFilter = tail!.config.inputSchema!.repo as z.ZodTypeAny;
+    expect(repoFilter.safeParse('a'.repeat(141)).success).toBe(false);
+    expect(repoFilter.safeParse('acme/widgets').success).toBe(true);
   });
 
   it('list_profiles handler returns a JSON payload (empty registry note)', async () => {

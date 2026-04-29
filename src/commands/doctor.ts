@@ -2,6 +2,7 @@ import { existsSync } from 'node:fs';
 
 import type { Octokit } from '@octokit/rest';
 
+import { isUnsafeAllowAll } from '../core/allowlist.js';
 import { getToken, type ResolvedToken } from '../core/auth.js';
 import {
   configPath,
@@ -125,6 +126,7 @@ export interface DoctorReport {
     version: string;
     userAgent: string;
   };
+  warnings: string[];
 }
 
 /**
@@ -192,7 +194,14 @@ export async function buildDoctorReport(
       version: readPackageVersion(),
       userAgent: `gh-baseline/${readPackageVersion()}`,
     },
+    warnings: [],
   };
+
+  if (configValid && isUnsafeAllowAll(config)) {
+    report.warnings.push(
+      'unsafeAllowAll is enabled — allowlist is bypassed for every scan/apply',
+    );
+  }
 
   if (!configValid) report.ok = false;
 
@@ -345,6 +354,8 @@ function printDoctorReport(report: DoctorReport): void {
   info(`audit log: ${report.audit.path} (${report.audit.entries} entries)`);
   info(`rate limit: ${report.rateLimit.perMinute}/min`);
   info(`octokit: ${report.octokit.userAgent}`);
+
+  for (const w of report.warnings) warn(w);
 
   if (report.ok) {
     success('all checks passed');

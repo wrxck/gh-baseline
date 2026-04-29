@@ -27,7 +27,17 @@ export interface GetTokenOptions {
   fetchImpl?: typeof fetch;
 }
 
-/** Default `runCmd` backed by `node:child_process.spawn`. */
+/**
+ * Cap external stderr/stdout text and redact GitHub-token-shaped substrings
+ * before interpolating into error messages. Defence in depth: tokens never
+ * appear in our own logs, but a hostile shim earlier in $PATH could write one.
+ */
+export function redactStderr(s: string, max = 200): string {
+  const trimmed = s.length > max ? `${s.slice(0, max)}…` : s;
+  return trimmed.replace(/gh[ps]_[A-Za-z0-9]{20,}/g, '[REDACTED]');
+}
+
+/** default `runCmd` backed by `node:child_process.spawn`. */
 export const defaultRunCmd: RunCmd = (cmd, args) =>
   new Promise((resolve) => {
     const child = spawn(cmd, args, { stdio: ['ignore', 'pipe', 'pipe'] });
@@ -67,7 +77,7 @@ export async function getToken(
     const tok = await runCmd('gh', ['auth', 'token']);
     if (tok.exitCode !== 0 || tok.stdout.trim() === '') {
       throw new AuthError(
-        `\`gh auth token\` failed (exit ${tok.exitCode}): ${tok.stderr.trim() || 'no output'}`,
+        `\`gh auth token\` failed (exit ${tok.exitCode}): ${redactStderr(tok.stderr.trim()) || 'no output'}`,
       );
     }
     const token = tok.stdout.trim();
@@ -76,6 +86,11 @@ export async function getToken(
     // gh auth status writes to stderr; combine to be safe across versions.
     const haystack = `${status.stdout}\n${status.stderr}`;
     const scopes = parseGhScopes(haystack);
+    if (status.exitCode === 0 && scopes.length === 0) {
+      process.stderr.write(
+        'gh-baseline: could not parse scopes from `gh auth status` output; assuming none\n',
+      );
+    }
     return { token, source: 'gh-cli', scopes };
   }
 
@@ -89,7 +104,13 @@ export async function getToken(
     mode = statSync(patPath).mode & 0o777;
   } catch (err) {
     throw new AuthError(
-      `Failed to stat PAT file at ${patPath}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to stat PAT file at ${patPath}: ${redactStderr(err instanceof Error ? err.message : String(err))}`,
+    );
+  }
+  if ((mode & 0o077) !== 0) {
+    throw new AuthError(
+      `PAT file at ${patPath} has loose permissions (${mode.toString(8)}); refusing to load. ` +
+        `chmod 600 ${patPath} and retry.`,
     );
   }
   if (mode !== 0o600) {
@@ -102,7 +123,7 @@ export async function getToken(
     token = readFileSync(patPath, 'utf-8').trim();
   } catch (err) {
     throw new AuthError(
-      `Failed to read PAT file at ${patPath}: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to read PAT file at ${patPath}: ${redactStderr(err instanceof Error ? err.message : String(err))}`,
     );
   }
   if (token === '') throw new AuthError(`PAT file at ${patPath} is empty`);
@@ -121,7 +142,7 @@ export async function getToken(
     });
   } catch (err) {
     throw new AuthError(
-      `Failed to probe GitHub for token scopes: ${err instanceof Error ? err.message : String(err)}`,
+      `Failed to probe GitHub for token scopes: ${redactStderr(err instanceof Error ? err.message : String(err))}`,
     );
   }
   if (!res.ok) {

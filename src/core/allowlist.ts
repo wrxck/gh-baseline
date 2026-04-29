@@ -55,7 +55,16 @@ export function checkAllowed(repoSlug: string, config: Config): void {
   throw new AllowlistError(repoSlug);
 }
 
-/** Non-throwing variant: returns true when `repoSlug` is allowed. */
+/**
+ * true when the config has bypassed the allowlist via `unsafeAllowAll`. Surfaced
+ * to users at MCP startup and in `gh_baseline_doctor` so an enabled bypass is
+ * never silent.
+ */
+export function isUnsafeAllowAll(config: Config): boolean {
+  return config.unsafeAllowAll === true;
+}
+
+/** non-throwing variant: returns true when `repoSlug` is allowed. */
 export function isAllowed(repoSlug: string, config: Config): boolean {
   try {
     checkAllowed(repoSlug, config);
