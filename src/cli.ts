@@ -132,7 +132,11 @@ export async function run(argv: string[]): Promise<void> {
       await scanCommand(args.slice(1));
       return;
     }
-    // 'apply' is wired in by feat/apply-branch-protection (#14).
+    case 'apply': {
+      const { runApply } = await import('./commands/apply.js');
+      await runApply(args.slice(1));
+      return;
+    }
     default:
       process.stderr.write(`Unknown command: ${command}\n`);
       process.stdout.write(HELP);

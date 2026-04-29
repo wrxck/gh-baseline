@@ -7,7 +7,13 @@ import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js'
 import type { Octokit } from '@octokit/rest';
 import { z } from 'zod';
 
+import {
+  applyBranchProtection,
+  type ApplyBranchProtectionResult,
+  type BranchProtectionRule,
+} from '../actors/apply-branch-protection.js';
 import { runChecks, type CheckResult } from '../checks/index.js';
+import { buildRuleFromProfile } from '../commands/apply.js';
 import { buildAuditView } from '../commands/audit.js';
 import { buildDoctorReport } from '../commands/doctor.js';
 import { listProfiles } from '../commands/profiles.js';
@@ -15,19 +21,34 @@ import { checkAllowed } from '../core/allowlist.js';
 import { auditLog } from '../core/audit.js';
 import { getToken } from '../core/auth.js';
 import { loadConfig, type Config } from '../core/config.js';
+import { GhBaselineError } from '../core/errors.js';
 import { createOctokit } from '../core/octokit.js';
-import { assertRepoSlug } from '../core/validate.js';
+import { createRateLimiter } from '../core/ratelimit.js';
+import { assertBranchName, assertRepoSlug } from '../core/validate.js';
 import { getProfile } from '../profiles/index.js';
 
 // ---------------------------------------------------------------------------
-// Tier 1 — read-only scan/diff
+// DI seam — swappable in tests so we can register tools and exercise their
+// schemas without any real network or filesystem touch.
 // ---------------------------------------------------------------------------
+
+export interface RegisterToolsDeps {
+  loadConfig?: () => Config;
+  buildOctokit?: (config: Config) => Promise<Octokit>;
+  applyBranchProtection?: typeof applyBranchProtection;
+  buildRuleFromProfile?: (profileId: string) => BranchProtectionRule;
+}
 
 export interface RegisterScanToolsDeps {
   /** Inject an octokit (tests). When set, on-disk auth is bypassed. */
   octokit?: Octokit;
   /** Inject a config (tests). When set, the on-disk config is not loaded. */
   config?: Config;
+}
+
+async function defaultBuildOctokit(config: Config): Promise<Octokit> {
+  const tok = await getToken(config);
+  return createOctokit(tok.token);
 }
 
 async function resolveScanDeps(
@@ -39,10 +60,74 @@ async function resolveScanDeps(
   return { octokit: createOctokit(tok.token), config };
 }
 
+const repoSchema = z
+  .string()
+  .min(1)
+  .superRefine((v, ctx) => {
+    try {
+      assertRepoSlug(v);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
+const branchSchema = z
+  .string()
+  .min(1)
+  .superRefine((v, ctx) => {
+    try {
+      assertBranchName(v);
+    } catch (err) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
+  });
+
 const ScanToolInputShape = {
   repo: z.string(),
   profile: z.string().optional(),
 } as const;
+
+interface RunToolArgs {
+  repo: string;
+  branch: string;
+  profile?: string;
+  dryRun: boolean;
+}
+
+async function executeApplyBranchProtection(
+  args: RunToolArgs,
+  deps: RegisterToolsDeps,
+): Promise<ApplyBranchProtectionResult> {
+  const config = (deps.loadConfig ?? loadConfig)();
+  checkAllowed(args.repo, config);
+  const profileId = args.profile ?? config.defaultProfile;
+  const rule = (deps.buildRuleFromProfile ?? buildRuleFromProfile)(profileId);
+  const octokit = await (deps.buildOctokit ?? defaultBuildOctokit)(config);
+
+  const limiter = createRateLimiter({ perMinute: config.rateLimit.perMinute });
+  await limiter.take();
+
+  const [owner, repo] = args.repo.split('/', 2) as [string, string];
+  const apply = deps.applyBranchProtection ?? applyBranchProtection;
+  return apply({
+    octokit,
+    owner,
+    repo,
+    branch: args.branch,
+    rule,
+    dryRun: args.dryRun,
+  });
+}
+
+// ---------------------------------------------------------------------------
+// Tier 1 — read-only scan/diff
+// ---------------------------------------------------------------------------
 
 export function registerScanTools(server: McpServer, deps: RegisterScanToolsDeps = {}): void {
   server.registerTool(
@@ -115,6 +200,93 @@ export function registerScanTools(server: McpServer, deps: RegisterScanToolsDeps
       }
       const payload = { repo, profile: profile.id, failing };
       return { content: [{ type: 'text', text: JSON.stringify(payload) }] };
+    },
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Tier 3 — branch protection apply/diff
+// ---------------------------------------------------------------------------
+
+export function registerBranchProtectionTools(
+  server: McpServer,
+  deps: RegisterToolsDeps = {},
+): void {
+  server.registerTool(
+    'gh_baseline_apply_branch_protection',
+    {
+      description:
+        'Apply (or dry-run) branch protection on a repo. Default dryRun=true; pass dryRun:false to actually persist.',
+      inputSchema: {
+        repo: repoSchema,
+        branch: branchSchema,
+        profile: z.string().min(1).optional(),
+        dryRun: z.boolean().default(true),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await executeApplyBranchProtection(
+          {
+            repo: args.repo,
+            branch: args.branch,
+            ...(args.profile !== undefined ? { profile: args.profile } : {}),
+            dryRun: args.dryRun,
+          },
+          deps,
+        );
+        return {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          structuredContent: result as unknown as Record<string, unknown>,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: message }],
+        };
+      }
+    },
+  );
+
+  server.registerTool(
+    'gh_baseline_diff_branch_protection',
+    {
+      description:
+        'Show the structural diff between current branch protection and the profile target. Always dry-run.',
+      inputSchema: {
+        repo: repoSchema,
+        branch: branchSchema,
+        profile: z.string().min(1).optional(),
+      },
+    },
+    async (args) => {
+      try {
+        const result = await executeApplyBranchProtection(
+          {
+            repo: args.repo,
+            branch: args.branch,
+            ...(args.profile !== undefined ? { profile: args.profile } : {}),
+            dryRun: true,
+          },
+          deps,
+        );
+        const diffOnly = {
+          changed: result.changed,
+          diff: result.diff,
+          before: result.before,
+        };
+        return {
+          content: [{ type: 'text', text: JSON.stringify(diffOnly) }],
+          structuredContent: diffOnly as unknown as Record<string, unknown>,
+        };
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return {
+          isError: true,
+          content: [{ type: 'text', text: message }],
+        };
+      }
     },
   );
 }
@@ -215,9 +387,12 @@ export async function startMcpServer(): Promise<void> {
   });
 
   registerScanTools(server);
+  registerBranchProtectionTools(server);
   registerSupportTools(server);
-  // 'apply' tools registered by feat/apply-branch-protection (#14).
 
   const transport = new StdioServerTransport();
   await server.connect(transport);
 }
+
+// Re-export for callers that want to compose this in their own server.
+export { GhBaselineError };
